@@ -26,6 +26,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         .catch((err) => sendResponse({ success: false, error: err.message }));
       return true;
 
+    case 'PARSE_TRANSCRIPT':
+      try {
+        const rawText = msg.rawText || '';
+        if (!rawText.trim()) {
+          sendResponse({ success: false, error: '空內容' });
+        } else {
+          const data = parseTimedTextAuto(rawText);
+          if (data.length === 0) {
+            sendResponse({ success: false, error: '解析後無字幕' });
+          } else {
+            sendResponse({ success: true, data });
+          }
+        }
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
+      }
+      return false;
+
     case 'GENERATE_SUMMARY':
       generateSummary(msg.transcript, msg.videoTitle, msg.settings)
         .then((data) => sendResponse({ success: true, data }))
@@ -43,6 +61,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // ── 字幕擷取 ──────────────────────────────────────────
+
+/**
+ * 自動偵測格式並解析（json3 / XML）
+ */
+function parseTimedTextAuto(text) {
+  const trimmed = text.trim();
+
+  // 嘗試 JSON（json3 格式）
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const json = JSON.parse(trimmed);
+      const result = parseJson3(json);
+      if (result.length > 0) return result;
+    } catch (e) {
+      // 不是 JSON，嘗試 XML
+    }
+  }
+
+  // 嘗試 XML
+  if (trimmed.startsWith('<') || trimmed.indexOf('<transcript') !== -1 || trimmed.indexOf('<text') !== -1) {
+    return parseTimedTextXML(trimmed);
+  }
+
+  // 未知格式
+  return [];
+}
 
 /**
  * 從 YouTube timedtext API 取得字幕

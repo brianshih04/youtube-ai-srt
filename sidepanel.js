@@ -234,7 +234,7 @@ function autoSelectTrack() {
 // ── 字幕擷取 ──────────────────────────────────────────
 
 /**
- * Promise 版本的逐字稿擷取（給 handleGenerateSummary 用）
+ * 在頁面環境 fetch 逐字稿（透過 content script，有正確 cookies）
  */
 function fetchTranscriptAsync() {
   return new Promise((resolve) => {
@@ -242,41 +242,52 @@ function fetchTranscriptAsync() {
       resolve([]);
       return;
     }
+
     showStatus('擷取逐字稿中...');
-    chrome.runtime.sendMessage(
-      { type: 'FETCH_CAPTIONS', baseUrl: state.selectedTrack.baseUrl, format: 'json3' },
-      (response) => {
+
+    getActiveTab().then((tab) => {
+      if (!tab) {
         hideStatus();
-        if (chrome.runtime.lastError || !response || !response.success) {
-          showError('逐字稿擷取失敗：' + (response?.error || '未知錯誤'));
-          resolve([]);
-          return;
-        }
-        state.transcript = response.data;
-        renderTranscript();
-        resolve(response.data);
+        resolve([]);
+        return;
       }
-    );
+
+      // 請 content script 在頁面環境 fetch
+      chrome.tabs.sendMessage(
+        tab.id,
+        { type: 'FETCH_TRANSCRIPT_INPAGE', baseUrl: state.selectedTrack.baseUrl },
+        async (response) => {
+          if (chrome.runtime.lastError || !response || !response.success) {
+            hideStatus();
+            showError('逐字稿擷取失敗：' + (response?.error || '未知錯誤'));
+            resolve([]);
+            return;
+          }
+
+          // 把原始文字丟給 background 解析
+          chrome.runtime.sendMessage(
+            { type: 'PARSE_TRANSCRIPT', rawText: response.rawText },
+            (parseResponse) => {
+              hideStatus();
+              if (chrome.runtime.lastError || !parseResponse || !parseResponse.success) {
+                showError('逐字稿解析失敗');
+                resolve([]);
+                return;
+              }
+              state.transcript = parseResponse.data;
+              renderTranscript();
+              resolve(parseResponse.data);
+            }
+          );
+        }
+      );
+    });
   });
 }
 
 async function fetchTranscript(track) {
-  showStatus('擷取逐字稿中...');
-
-  chrome.runtime.sendMessage(
-    { type: 'FETCH_CAPTIONS', baseUrl: track.baseUrl, format: 'json3' },
-    (response) => {
-      if (chrome.runtime.lastError || !response || !response.success) {
-        hideStatus();
-        showError('逐字稿擷取失敗：' + (response?.error || '未知錯誤'));
-        return;
-      }
-
-      state.transcript = response.data;
-      hideStatus();
-      renderTranscript();
-    }
-  );
+  state.selectedTrack = track;
+  await fetchTranscriptAsync();
 }
 
 // ── 摘要生成 ──────────────────────────────────────────

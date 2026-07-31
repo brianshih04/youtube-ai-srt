@@ -184,6 +184,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ success: true });
     return false;
   }
+
+  if (msg.type === 'FETCH_TRANSCRIPT_INPAGE') {
+    // 在頁面環境 fetch timedtext（有正確的 cookies/origin）
+    const url = msg.baseUrl.replace(/\\u0026/g, '&') + '&fmt=json3';
+    fetch(url)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.text();
+      })
+      .then((text) => {
+        if (!text.trim()) {
+          // 嘗試不帶 fmt
+          return fetch(msg.baseUrl.replace(/\\u0026/g, '&'))
+            .then((r) => r.text());
+        }
+        return text;
+      })
+      .then((text) => {
+        sendResponse({ success: true, rawText: text });
+      })
+      .catch((err) => {
+        sendResponse({ success: false, error: err.message });
+      });
+    return true;
+  }
 });
 
 // ── SPA 導航監聽 ──────────────────────────────────────
