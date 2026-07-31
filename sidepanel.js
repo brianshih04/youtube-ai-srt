@@ -253,32 +253,77 @@ function fetchTranscriptAsync() {
         return;
       }
 
-      const cleanBaseUrl = state.selectedTrack.baseUrl.replace(/\\u0026/g, '&');
-      const urls = [
-        cleanBaseUrl + '&fmt=json3',
-        cleanBaseUrl + '&fmt=srv3',
-        cleanBaseUrl,
-      ];
-
       try {
-        // 在 MAIN world 執行 fetch（帶完整頁面 session）
+        // 在 MAIN world 直接從 YouTube player 取得字幕
         const results = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           world: 'MAIN',
-          func: async (urlList) => {
-            for (const url of urlList) {
+          func: async () => {
+            // Step 1: 從 player 物件取得 fresh baseUrl
+            var baseUrl = null;
+            var player = document.getElementById('movie_player');
+
+            if (player && player.getPlayerResponse) {
               try {
-                const r = await fetch(url);
+                var pr = player.getPlayerResponse();
+                var tracks = pr && pr.captions
+                  && pr.captions.playerCaptionsTracklistRenderer
+                  && pr.captions.playerCaptionsTracklistRenderer.captionTracks;
+                if (tracks && tracks.length > 0) {
+                  baseUrl = tracks[0].baseUrl;
+                }
+              } catch (e) {}
+            }
+
+            // Fallback: 從 ytInitialPlayerResponse 取得
+            if (!baseUrl && typeof ytInitialPlayerResponse !== 'undefined') {
+              try {
+                var tracks2 = ytInitialPlayerResponse.captions
+                  && ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer
+                  && ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer.captionTracks;
+                if (tracks2 && tracks2.length > 0) {
+                  baseUrl = tracks2[0].baseUrl;
+                }
+              } catch (e) {}
+            }
+
+            if (!baseUrl) {
+              return { success: false, error: '無法從 player 取得字幕軌' };
+            }
+
+            // Step 2: 嘗試多種格式 fetch
+            var cleanUrl = baseUrl.replace(/\\u0026/g, '&');
+            var urls = [
+              cleanUrl + '&fmt=json3',
+              cleanUrl + '&fmt=srv3',
+              cleanUrl,
+            ];
+
+            for (var i = 0; i < urls.length; i++) {
+              try {
+                var r = await fetch(urls[i]);
                 if (!r.ok) continue;
-                const text = await r.text();
+                var text = await r.text();
                 if (text && text.trim()) {
                   return { success: true, rawText: text };
                 }
               } catch (e) {}
             }
-            return { success: false, error: '所有格式都回傳空' };
+
+            // Step 3: 如果 fetch 全失敗，嘗試從 player 的 caption module 直接讀
+            if (player) {
+              try {
+                player.loadModule('captions');
+                await new Promise(function(r) { setTimeout(r, 2000); });
+                var track = player.getOption('captions', 'track');
+                if (track && track.transcript) {
+                  return { success: true, rawText: JSON.stringify(track.transcript) };
+                }
+              } catch (e) {}
+            }
+
+            return { success: false, error: '所有方法都失敗' };
           },
-          args: [urls],
         });
 
         const result = results?.[0]?.result;
