@@ -165,14 +165,23 @@ async function loadPageInfo() {
     return;
   }
 
-  // 向 content script 請求頁面資訊
-  chrome.tabs.sendMessage(tab.id, { type: 'GET_PAGE_INFO' }, (response) => {
-    if (chrome.runtime.lastError) {
-      // content script 可能尚未載入，嘗試直接注入
-      console.warn('Content script not ready:', chrome.runtime.lastError.message);
-      showEmptyState();
-      return;
-    }
+  // 向 content script 請求頁面資訊（帶 timeout 保護）
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('timeout')), 12000)
+  );
+
+  const messagePromise = new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tab.id, { type: 'GET_PAGE_INFO' }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError);
+      } else {
+        resolve(response);
+      }
+    });
+  });
+
+  try {
+    const response = await Promise.race([messagePromise, timeoutPromise]);
 
     if (!response || !response.success) {
       showEmptyState();
@@ -191,10 +200,12 @@ async function loadPageInfo() {
     state.videoTitle = response.title;
     state.captions = response.captions;
     renderVideoInfo();
-
-    // 自動選最佳字幕軌並擷取
     autoSelectTrack();
-  });
+  } catch (err) {
+    // content script 可能還沒載入，顯示提示
+    showEmptyState();
+    showError('無法連接頁面，請重新整理 YouTube 頁面後再試');
+  }
 }
 
 /**
