@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.zip
+*.crx
+.DS_Store
+Thumbs.db
+.env
+api_keys.json
