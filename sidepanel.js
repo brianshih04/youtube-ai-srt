@@ -311,178 +311,34 @@ function autoSelectTrack() {
 // ── 字幕擷取 ──────────────────────────────────────────
 
 /**
- * 在頁面 MAIN world fetch 逐字稿（透過 chrome.scripting.executeScript）
- * 只有 MAIN world 的 fetch 才帶完整的頁面 session
+ * 透過 Innertube ANDROID API 擷取逐字稿（主要方法）
+ * MAIN world timedtext 被 YouTube 反爬擋住，ANDROID client 不受限制
  */
 function fetchTranscriptAsync() {
   return new Promise((resolve) => {
-    if (!state.selectedTrack) {
+    if (!state.videoId) {
       resolve([]);
       return;
     }
 
     showStatus('擷取逐字稿中...');
 
-    getActiveTab().then(async (tab) => {
-      if (!tab) {
-        hideStatus();
-        resolve([]);
-        return;
-      }
-
-      try {
-        // 在 MAIN world 直接從 YouTube player 取得字幕
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          world: 'MAIN',
-          func: async (trackUrl, trackLang) => {
-            // Step 1: 取得所有字幕軌的 fresh baseUrl
-            var allTracks = [];
-            var player = document.getElementById('movie_player');
-
-            if (player && player.getPlayerResponse) {
-              try {
-                var pr = player.getPlayerResponse();
-                var tracks = pr && pr.captions
-                  && pr.captions.playerCaptionsTracklistRenderer
-                  && pr.captions.playerCaptionsTracklistRenderer.captionTracks;
-                if (tracks) allTracks = tracks;
-              } catch (e) {}
-            }
-
-            if (allTracks.length === 0 && typeof ytInitialPlayerResponse !== 'undefined') {
-              try {
-                var tracks2 = ytInitialPlayerResponse.captions
-                  && ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer
-                  && ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer.captionTracks;
-                if (tracks2) allTracks = tracks2;
-              } catch (e) {}
-            }
-
-            if (allTracks.length === 0) {
-              return { success: false, error: 'player 裡沒有字幕軌' };
-            }
-
-            // 找到跟傳入的 URL 或語言匹配的 track
-            var targetTrack = null;
-            for (var i = 0; i < allTracks.length; i++) {
-              if (allTracks[i].languageCode === trackLang) {
-                targetTrack = allTracks[i];
-                break;
-              }
-            }
-            if (!targetTrack) targetTrack = allTracks[0];
-
-            var baseUrl = targetTrack.baseUrl;
-            var cleanUrl = baseUrl.replace(/\\u0026/g, '&');
-
-            // debug info
-            var debug = { trackCount: allTracks.length, chosenLang: targetTrack.languageCode, cleanUrl: cleanUrl.substring(0, 100) };
-
-            // Step 2: 嘗試 fetch
-            var formats = ['json3', 'srv3', 'srv1', ''];
-            for (var f = 0; f < formats.length; f++) {
-              var url = formats[f] ? cleanUrl + '&fmt=' + formats[f] : cleanUrl;
-              try {
-                var r = await fetch(url);
-                debug['status_' + (formats[f] || 'none')] = r.status;
-                if (!r.ok) continue;
-                var text = await r.text();
-                debug['len_' + (formats[f] || 'none')] = text.length;
-                if (text && text.trim()) {
-                  return { success: true, rawText: text, debug: debug };
-                }
-              } catch (e) {
-                debug['err_' + (formats[f] || 'none')] = e.message;
-              }
-            }
-
-            // Step 3: player caption module fallback
-            if (player) {
-              try {
-                player.loadModule('captions');
-                await new Promise(function(r) { setTimeout(r, 2000); });
-                var track = player.getOption('captions', 'track');
-                if (track) {
-                  var captionData = player.getOption('captions', 'tracklist') || [];
-                  debug.captionModuleTracks = captionData.length;
-                  if (track.transcript) {
-                    return { success: true, rawText: JSON.stringify(track.transcript), debug: debug };
-                  }
-                  // 嘗試從 caption display 取得
-                  player.setOption('captions', 'track', { languageCode: targetTrack.languageCode });
-                  await new Promise(function(r) { setTimeout(r, 1000); });
-                  var display = player.getOption('captions', 'text');
-                  if (display) {
-                    return { success: true, rawText: display, debug: debug };
-                  }
-                }
-              } catch (e) {
-                debug.captionModuleError = e.message;
-              }
-            }
-
-            return { success: false, error: '所有方法都失敗', debug: debug };
-          },
-          args: [state.selectedTrack.baseUrl, state.selectedTrack.languageCode],
-        });
-
-        const result = results?.[0]?.result;
-
-        if (!result || !result.success) {
-          // timedtext 被 YouTube 擋，改用 Innertube ANDROID API
+    chrome.runtime.sendMessage(
+      { type: 'FETCH_CAPTIONS_INNERTUBE', videoId: state.videoId },
+      (response) => {
+        if (chrome.runtime.lastError || !response || !response.success) {
           hideStatus();
-          showStatus('嘗試替代字幕擷取方式...');
-          
-          chrome.runtime.sendMessage(
-            { type: 'FETCH_CAPTIONS_INNERTUBE', videoId: state.videoId },
-            (innertubeResponse) => {
-              hideStatus();
-              if (!chrome.runtime.lastError && innertubeResponse && innertubeResponse.success) {
-                state.transcript = innertubeResponse.data;
-                renderTranscript();
-                resolve(innertubeResponse.data);
-                return;
-              }
-              
-              // Innertube 也失敗，顯示 ASR fallback 按鈕
-              const asrHint = '<br><button id="btn-fallback-asr" class="btn btn-primary" style="margin-top:8px;">🎙️ 改用語音辨識</button>';
-              el.summaryContent.innerHTML = `<p class="placeholder">⚠️ YouTube 字幕擷取被擋${asrHint}</p>`;
-              el.transcriptContent.innerHTML = `<p class="placeholder">⚠️ YouTube 字幕擷取被擋${asrHint}</p>`;
-              const btnAsr = document.getElementById('btn-fallback-asr');
-              if (btnAsr) {
-                btnAsr.addEventListener('click', () => {
-                  el.summaryContent.innerHTML = '';
-                  handleWhisperTranscribe();
-                });
-              }
-              resolve([]);
-            }
-          );
+          showError('逐字稿擷取失敗：' + (response?.error || chrome.runtime.lastError?.message || '未知錯誤'));
+          resolve([]);
           return;
         }
 
-        // 把原始文字丟給 background 解析
-        chrome.runtime.sendMessage(
-          { type: 'PARSE_TRANSCRIPT', rawText: result.rawText },
-          (parseResponse) => {
-            hideStatus();
-            if (chrome.runtime.lastError || !parseResponse || !parseResponse.success) {
-              showError('逐字稿解析失敗：' + (parseResponse?.error || ''));
-              resolve([]);
-              return;
-            }
-            state.transcript = parseResponse.data;
-            renderTranscript();
-            resolve(parseResponse.data);
-          }
-        );
-      } catch (err) {
+        state.transcript = response.data;
+        renderTranscript();
         hideStatus();
-        showError('逐字稿擷取失敗：' + err.message);
-        resolve([]);
+        resolve(response.data);
       }
-    });
+    );
   });
 }
 
