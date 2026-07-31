@@ -430,10 +430,21 @@ function fetchTranscriptAsync() {
         const result = results?.[0]?.result;
 
         if (!result || !result.success) {
+          // timedtext 被 YouTube 擋住，不自動 fallback（避免搶佔用）
+          // 改為提示使用者手動點 ASR 按鈕
           hideStatus();
-          // timedtext 被 YouTube 擋住，自動 fallback 到 ASR
-          console.log('timedtext failed, falling back to ASR');
-          await handleWhisperTranscribe();
+          const asrHint = state.settings.asrUrl
+            ? '<br><button id="btn-fallback-asr" class="btn btn-primary" style="margin-top:8px;">🎙️ 改用語音辨識</button>'
+            : '';
+          el.summaryContent.innerHTML = `<p class="placeholder">⚠️ YouTube 字幕擷取被擋${asrHint}</p>`;
+          el.transcriptContent.innerHTML = `<p class="placeholder">⚠️ YouTube 字幕擷取被擋${asrHint}</p>`;
+          const btnAsr = document.getElementById('btn-fallback-asr');
+          if (btnAsr) {
+            btnAsr.addEventListener('click', () => {
+              el.summaryContent.innerHTML = '';
+              handleWhisperTranscribe();
+            });
+          }
           resolve([]);
           return;
         }
