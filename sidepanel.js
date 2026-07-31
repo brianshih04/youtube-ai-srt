@@ -233,6 +233,33 @@ function autoSelectTrack() {
 
 // ── 字幕擷取 ──────────────────────────────────────────
 
+/**
+ * Promise 版本的逐字稿擷取（給 handleGenerateSummary 用）
+ */
+function fetchTranscriptAsync() {
+  return new Promise((resolve) => {
+    if (!state.selectedTrack) {
+      resolve([]);
+      return;
+    }
+    showStatus('擷取逐字稿中...');
+    chrome.runtime.sendMessage(
+      { type: 'FETCH_CAPTIONS', baseUrl: state.selectedTrack.baseUrl, format: 'json3' },
+      (response) => {
+        hideStatus();
+        if (chrome.runtime.lastError || !response || !response.success) {
+          showError('逐字稿擷取失敗：' + (response?.error || '未知錯誤'));
+          resolve([]);
+          return;
+        }
+        state.transcript = response.data;
+        renderTranscript();
+        resolve(response.data);
+      }
+    );
+  });
+}
+
 async function fetchTranscript(track) {
   showStatus('擷取逐字稿中...');
 
@@ -255,8 +282,13 @@ async function fetchTranscript(track) {
 // ── 摘要生成 ──────────────────────────────────────────
 
 async function handleGenerateSummary() {
+  // 如果還沒逐字稿，自動先抓
+  if (state.transcript.length === 0 && state.selectedTrack) {
+    await fetchTranscriptAsync();
+  }
+
   if (state.transcript.length === 0) {
-    showError('請先擷取逐字稿');
+    showError('無法擷取逐字稿，請確認此影片有字幕');
     return;
   }
 

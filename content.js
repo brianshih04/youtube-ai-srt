@@ -135,7 +135,7 @@ async function fetchPageInfo(maxRetries = 5, delay = 1000) {
 
     if (tracks) {
       const captions = tracks.map((t) => ({
-        baseUrl: t.baseUrl,
+        baseUrl: (t.baseUrl || '').replace(/\\u0026/g, '&'),
         languageCode: t.languageCode,
         kind: t.kind || null,
         name: t.name?.simpleText || t.name?.runs?.[0]?.text || t.languageCode,

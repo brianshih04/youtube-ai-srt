@@ -49,9 +49,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
  * 回傳 [{ start, dur, text }] 陣列
  */
 async function fetchTimedText(baseUrl, format = 'json3') {
-  // YouTube timedtext API 支援多種格式
-  // json3 是結構最完整的（含時間軸）
-  const url = new URL(baseUrl);
+  // 修正 YouTube baseUrl 裡的 unicode escape（\u0026 → &）
+  const cleanUrl = baseUrl.replace(/\\u0026/g, '&');
+
+  const url = new URL(cleanUrl);
 
   // 移除可能存在的 format 參數，再加回去
   url.searchParams.delete('fmt');
@@ -65,10 +66,19 @@ async function fetchTimedText(baseUrl, format = 'json3') {
   }
 
   if (format === 'json3') {
-    const json = await response.json();
-    return parseJson3(json);
+    const text = await response.text();
+    // YouTube 有時回空內容或非 JSON
+    if (!text.trim()) {
+      throw new Error('timedtext 回傳空內容');
+    }
+    try {
+      const json = JSON.parse(text);
+      return parseJson3(json);
+    } catch (e) {
+      // 可能是 XML 格式，嘗試 fallback
+      return parseTimedTextXML(text);
+    }
   } else {
-    // XML 格式 fallback
     const xml = await response.text();
     return parseTimedTextXML(xml);
   }
