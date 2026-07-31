@@ -22,6 +22,7 @@ const state = {
     apiKey: '',
     model: '',
     baseUrl: '',
+    asrUrl: 'http://localhost:8503',
   },
   activeTab: 'summary',
 };
@@ -59,6 +60,7 @@ const el = {
   settingModel: document.getElementById('setting-model'),
   settingBaseUrl: document.getElementById('setting-baseurl'),
   labelBaseUrl: document.getElementById('label-baseurl'),
+  settingAsrUrl: document.getElementById('setting-asrurl'),
   btnSaveSettings: document.getElementById('btn-save-settings'),
 };
 
@@ -110,6 +112,7 @@ async function loadSettings() {
   el.settingApiKey.value = state.settings.apiKey;
   el.settingModel.value = state.settings.model || '';
   el.settingBaseUrl.value = state.settings.baseUrl || '';
+  el.settingAsrUrl.value = state.settings.asrUrl || 'http://localhost:8503';
   toggleBaseUrlVisibility();
 }
 
@@ -150,6 +153,7 @@ async function saveSettings() {
     apiKey: el.settingApiKey.value.trim(),
     model: el.settingModel.value.trim(),
     baseUrl: el.settingBaseUrl.value.trim(),
+    asrUrl: el.settingAsrUrl.value.trim() || 'http://localhost:8503',
   };
   await chrome.storage.local.set({ settings: state.settings });
   closeSettings();
@@ -389,6 +393,50 @@ async function fetchTranscript(track) {
   await fetchTranscriptAsync();
 }
 
+// ── Whisper 語音辨識 fallback ────────────────────────
+
+async function handleWhisperTranscribe() {
+  if (!state.videoId) return;
+
+  showStatus('正在下載音訊並辨識... 這可能需要幾分鐘');
+
+  const asrUrl = state.settings.asrUrl || 'http://localhost:8503';
+  const videoUrl = `https://www.youtube.com/watch?v=${state.videoId}`;
+
+  try {
+    const response = await fetch(`${asrUrl}/transcribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: videoUrl }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      hideStatus();
+      showError('語音辨識失敗：' + err.substring(0, 200));
+      return;
+    }
+
+    const data = await response.json();
+    hideStatus();
+
+    if (data.segments && data.segments.length > 0) {
+      state.transcript = data.segments;
+      state.captions = [{ languageCode: data.language || 'auto', name: 'MOSS-Transcribe', kind: 'asr' }];
+      renderTranscript();
+      // 自動切到逐字稿分頁
+      switchTab('transcript');
+      showStatus(`✅ 辨識完成：${data.segments.length} 段，${Math.round(data.duration || 0)}秒`);
+      setTimeout(() => hideStatus(), 3000);
+    } else {
+      showError('語音辨識完成但沒有結果');
+    }
+  } catch (err) {
+    hideStatus();
+    showError('語音辨識失敗：' + err.message);
+  }
+}
+
 // ── 摘要生成 ──────────────────────────────────────────
 
 async function handleGenerateSummary() {
@@ -462,8 +510,24 @@ function renderNoCaptions() {
   el.videoMeta.textContent = '此影片沒有字幕';
   el.emptyState.classList.add('hidden');
   el.main.classList.remove('hidden');
-  el.summaryContent.innerHTML = '<p class="placeholder">⚠️ 此影片沒有字幕，無法生成摘要</p>';
-  el.transcriptContent.innerHTML = '<p class="placeholder">⚠️ 此影片沒有字幕</p>';
+
+  // 替換摘要區為 Whisper fallback 按鈕
+  el.summaryContent.innerHTML = `
+    <p style="text-align:center; padding: 20px 0; color: var(--text-muted);">
+      ⚠️ 此影片沒有 YouTube 字幕<br><br>
+      <button id="btn-whisper" class="btn btn-primary" style="margin-top: 12px;">
+        🎙️ 用 MOSS-Transcribe 語音辨識
+      </button>
+    </p>
+  `;
+
+  // 綁定 Whisper 按鈕
+  const btnWhisper = document.getElementById('btn-whisper');
+  if (btnWhisper) {
+    btnWhisper.addEventListener('click', handleWhisperTranscribe);
+  }
+
+  el.transcriptContent.innerHTML = '<p class="placeholder">⚠️ 此影片沒有字幕，可用語音辨識生成</p>';
 }
 
 function renderSummary() {
