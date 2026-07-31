@@ -1,13 +1,8 @@
 /**
- * Content Script (隔離世界) — 協調 YouTube 頁面與擴充功能
+ * Content Script (隔離世界) — 從 YouTube 頁面擷取字幕軌
  *
- * 職責：
- * 1. 向 main-world.js 發送請求，取得字幕軌列表
- * 2. 回應 Side Panel 的 GET_PAGE_INFO 請求
- * 3. 監聽 SPA 導航
- *
- * 注意：不使用 inline script 注入（YouTube CSP 擋住）
- *       main-world.js 透過 manifest.json 的 world:"MAIN" 載入
+ * 策略：直接從 DOM 的 <script> 標籤解析 ytInitialPlayerResponse。
+ * 這在隔離世界完全可行，不需要注入主世界腳本。
  */
 
 // ── 狀態 ──────────────────────────────────────────────
@@ -35,37 +30,88 @@ function getVideoTitle() {
   return document.title.replace(' - YouTube', '').trim();
 }
 
-// ── 向主世界請求字幕資訊 ──────────────────────────────
+// ── 字幕軌擷取 ────────────────────────────────────────
 
-function requestCaptionsFromMainWorld(videoId) {
-  return new Promise((resolve) => {
-    let resolved = false;
+/**
+ * 從 DOM <script> 標籤解析 ytInitialPlayerResponse
+ */
+function extractCaptionTracks() {
+  const scripts = document.querySelectorAll('script:not([src])');
+  for (const script of scripts) {
+    const text = script.textContent;
+    if (!text || text.indexOf('captionTracks') === -1) continue;
 
-    const handler = (event) => {
-      if (event.source !== window) return;
-      if (event.data.type === 'YASRT_RESULT' && event.data.videoId === videoId) {
-        window.removeEventListener('message', handler);
-        resolved = true;
-        resolve(event.data);
+    // 嘗試提取 ytInitialPlayerResponse = {...};
+    // 注意：JSON 很大，需要貪婪匹配到正確的結尾分號
+    try {
+      // 方法一：標準 regex
+      const match = text.match(/var\s+ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\});\s*(?:var\s|<\/script>|$)/);
+      if (match) {
+        const data = JSON.parse(match[1]);
+        const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+        if (tracks && tracks.length > 0) return tracks;
       }
-    };
-    window.addEventListener('message', handler);
+    } catch (e) {
+      // regex 可能截斷 JSON，嘗試方法二
+    }
 
-    // 超時（5 秒）
-    setTimeout(() => {
-      if (!resolved) {
-        window.removeEventListener('message', handler);
-        resolve({ captions: [], hasCaptions: false, error: 'timeout' });
+    // 方法二：用括號配對找到完整 JSON
+    try {
+      const marker = 'ytInitialPlayerResponse';
+      const idx = text.indexOf(marker);
+      if (idx === -1) continue;
+
+      // 找到 = 號後的 {
+      let braceIdx = text.indexOf('{', idx);
+      if (braceIdx === -1) continue;
+
+      // 括號配對
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      let endIdx = -1;
+
+      for (let i = braceIdx; i < text.length; i++) {
+        const ch = text[i];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (ch === '\\') {
+          escape = true;
+          continue;
+        }
+        if (ch === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (inString) continue;
+        if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            endIdx = i;
+            break;
+          }
+        }
       }
-    }, 5000);
 
-    // 向 main-world.js 發送請求
-    window.postMessage({ type: 'YASRT_REQUEST', videoId }, '*');
-  });
+      if (endIdx === -1) continue;
+
+      const jsonStr = text.substring(braceIdx, endIdx + 1);
+      const data = JSON.parse(jsonStr);
+      const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (tracks && tracks.length > 0) return tracks;
+    } catch (e) {
+      // 繼續嘗試下一個 script
+    }
+  }
+
+  return null;
 }
 
 /**
- * 帶重試的擷取
+ * 主函式：擷取頁面資訊
  */
 async function fetchPageInfo(maxRetries = 5, delay = 1000) {
   const videoId = getVideoId();
@@ -85,38 +131,34 @@ async function fetchPageInfo(maxRetries = 5, delay = 1000) {
   }
 
   for (let i = 0; i < maxRetries; i++) {
-    const result = await requestCaptionsFromMainWorld(videoId);
+    const tracks = extractCaptionTracks();
 
-    if (result.hasCaptions) {
-      cachedCaptions = result.captions;
+    if (tracks) {
+      const captions = tracks.map((t) => ({
+        baseUrl: t.baseUrl,
+        languageCode: t.languageCode,
+        kind: t.kind || null,
+        name: t.name?.simpleText || t.name?.runs?.[0]?.text || t.languageCode,
+      }));
+
+      cachedCaptions = captions;
       cachedVideoId = videoId;
       return {
         success: true,
         videoId,
         title: getVideoTitle(),
-        captions: result.captions,
+        captions,
         hasCaptions: true,
       };
     }
 
-    // 明確無字幕（非 timeout / 非 no_player_response）
-    if (result.error && result.error !== 'timeout' && result.error !== 'no_player_response') {
-      cachedCaptions = [];
-      cachedVideoId = videoId;
-      return {
-        success: true,
-        videoId,
-        title: getVideoTitle(),
-        captions: [],
-        hasCaptions: false,
-      };
-    }
-
+    // 等待後重試（SPA 載入延遲）
     if (i < maxRetries - 1) {
       await new Promise((r) => setTimeout(r, delay));
     }
   }
 
+  // 重試完畢仍無字幕
   cachedCaptions = [];
   cachedVideoId = videoId;
   return {
