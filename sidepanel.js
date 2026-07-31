@@ -398,39 +398,46 @@ async function fetchTranscript(track) {
 async function handleWhisperTranscribe() {
   if (!state.videoId) return;
 
-  showStatus('正在下載音訊並辨識... 預計 2-5 分鐘');
-
   const asrUrl = state.settings.asrUrl || 'https://yt-transcribe.avision-gb10.org';
   const videoUrl = `https://www.youtube.com/watch?v=${state.videoId}`;
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 分鐘
-
-    const response = await fetch(`${asrUrl}/transcribe`, {
+    // Step 1: 提交 job
+    showStatus('提交轉錄請求...');
+    const submitResp = await fetch(`${asrUrl}/transcribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: videoUrl }),
-      signal: controller.signal,
     });
 
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      const err = await response.text();
+    if (!submitResp.ok) {
+      const err = await submitResp.text();
       hideStatus();
-      showError('語音辨識失敗：' + err.substring(0, 200));
+      showError('轉錄請求失敗：' + err.substring(0, 200));
       return;
     }
 
-    const data = await response.json();
+    const { job_id } = await submitResp.json();
+    if (!job_id) {
+      hideStatus();
+      showError('伺服器沒有回傳 job_id');
+      return;
+    }
+
+    // Step 2: 輪詢進度
+    const result = await pollJobStatus(asrUrl, job_id);
     hideStatus();
 
+    if (!result || result.status !== 'done' || !result.result) {
+      showError('語音辨識失敗：' + (result?.message || '未知錯誤'));
+      return;
+    }
+
+    const data = result.result;
     if (data.segments && data.segments.length > 0) {
       state.transcript = data.segments;
       state.captions = [{ languageCode: data.language || 'auto', name: 'MOSS-Transcribe', kind: 'asr' }];
       renderTranscript();
-      // 自動切到逐字稿分頁
       switchTab('transcript');
       showStatus(`✅ 辨識完成：${data.segments.length} 段，${Math.round(data.duration || 0)}秒`);
       setTimeout(() => hideStatus(), 3000);
@@ -441,6 +448,30 @@ async function handleWhisperTranscribe() {
     hideStatus();
     showError('語音辨識失敗：' + err.message);
   }
+}
+
+/**
+ * 輪詢 job 狀態直到 done/failed
+ */
+function pollJobStatus(asrUrl, jobId) {
+  return new Promise((resolve) => {
+    const interval = setInterval(async () => {
+      try {
+        const resp = await fetch(`${asrUrl}/job/${jobId}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+
+        if (data.status === 'done' || data.status === 'failed') {
+          clearInterval(interval);
+          resolve(data);
+        } else {
+          showStatus(`${data.message || '處理中...'} (${data.progress || 0}%)`);
+        }
+      } catch (e) {
+        // 繼續重試
+      }
+    }, 3000); // 每 3 秒查一次
+  });
 }
 
 // ── 摘要生成 ──────────────────────────────────────────
