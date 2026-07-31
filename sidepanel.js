@@ -431,8 +431,9 @@ function fetchTranscriptAsync() {
 
         if (!result || !result.success) {
           hideStatus();
-          const dbg = result?.debug ? '\n' + JSON.stringify(result.debug) : '';
-          showError('逐字稿擷取失敗：' + (result?.error || '未知錯誤') + dbg);
+          // timedtext 被 YouTube 擋住，自動 fallback 到 ASR
+          console.log('timedtext failed, falling back to ASR');
+          await handleWhisperTranscribe();
           resolve([]);
           return;
         }
