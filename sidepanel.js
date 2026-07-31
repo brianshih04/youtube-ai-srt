@@ -398,17 +398,23 @@ async function fetchTranscript(track) {
 async function handleWhisperTranscribe() {
   if (!state.videoId) return;
 
-  showStatus('正在下載音訊並辨識... 這可能需要幾分鐘');
+  showStatus('正在下載音訊並辨識... 預計 2-5 分鐘');
 
   const asrUrl = state.settings.asrUrl || 'https://yt-transcribe.avision-gb10.org';
   const videoUrl = `https://www.youtube.com/watch?v=${state.videoId}`;
 
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 分鐘
+
     const response = await fetch(`${asrUrl}/transcribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: videoUrl }),
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const err = await response.text();
