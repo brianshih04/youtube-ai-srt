@@ -132,10 +132,13 @@ function decodeHtmlEntities(str) {
 
 // ── LLM 摘要生成 ──────────────────────────────────────
 
+const SYSTEM_PROMPT = 'You are a helpful assistant that summarizes video transcripts. Respond in the same language as the transcript.';
+
 const LLM_PROVIDERS = {
   gemini: {
-    url: (apiKey, model) =>
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    type: 'gemini',
+    url: (apiKey, model, baseUrl) =>
+      `${baseUrl || 'https://generativelanguage.googleapis.com'}/v1beta/models/${model}:generateContent?key=${apiKey}`,
     buildRequest: (prompt, model) => ({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.3, maxOutputTokens: 4096 },
@@ -145,11 +148,12 @@ const LLM_PROVIDERS = {
     defaultModel: 'gemini-2.5-flash',
   },
   openai: {
-    url: () => 'https://api.openai.com/v1/chat/completions',
+    type: 'openai',
+    url: (apiKey, model, baseUrl) => `${baseUrl || 'https://api.openai.com'}/v1/chat/completions`,
     buildRequest: (prompt, model) => ({
-      model: model,
+      model,
       messages: [
-        { role: 'system', content: 'You are a helpful assistant that summarizes video transcripts. Respond in the same language as the transcript.' },
+        { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
       temperature: 0.3,
@@ -159,11 +163,12 @@ const LLM_PROVIDERS = {
     defaultModel: 'gpt-4o-mini',
   },
   deepseek: {
-    url: () => 'https://api.deepseek.com/chat/completions',
+    type: 'openai',
+    url: (apiKey, model, baseUrl) => `${baseUrl || 'https://api.deepseek.com'}/chat/completions`,
     buildRequest: (prompt, model) => ({
-      model: model,
+      model,
       messages: [
-        { role: 'system', content: 'You are a helpful assistant that summarizes video transcripts. Respond in the same language as the transcript.' },
+        { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
       temperature: 0.3,
@@ -171,6 +176,21 @@ const LLM_PROVIDERS = {
     }),
     extractResponse: (data) => data?.choices?.[0]?.message?.content || '',
     defaultModel: 'deepseek-chat',
+  },
+  custom: {
+    type: 'openai',
+    url: (apiKey, model, baseUrl) => `${(baseUrl || '').replace(/\/+$/, '')}/v1/chat/completions`,
+    buildRequest: (prompt, model) => ({
+      model,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 4096,
+    }),
+    extractResponse: (data) => data?.choices?.[0]?.message?.content || '',
+    defaultModel: '',
   },
 };
 
@@ -186,6 +206,7 @@ async function generateSummary(transcript, videoTitle, settings) {
   if (!apiKey) throw new Error('API Key not set');
 
   const model = settings.model || config.defaultModel;
+  const baseUrl = settings.baseUrl || '';
   const prompt = buildSummaryPrompt(transcript, videoTitle);
 
   // 分段處理（超長逐字稿）
@@ -195,13 +216,14 @@ async function generateSummary(transcript, videoTitle, settings) {
   }
 
   const body = config.buildRequest(prompt, model);
-  const url = config.url(apiKey, model);
+  const url = config.url(apiKey, model, baseUrl);
+  const isGemini = config.type === 'gemini';
 
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(provider !== 'gemini' ? { Authorization: `Bearer ${apiKey}` } : {}),
+      ...(isGemini ? {} : { Authorization: `Bearer ${apiKey}` }),
     },
     body: JSON.stringify(body),
   });
@@ -221,19 +243,21 @@ async function generateSummary(transcript, videoTitle, settings) {
  * 分段摘要（長影片用）
  */
 async function generateChunkedSummary(transcript, videoTitle, settings, config, model, apiKey) {
+  const baseUrl = settings.baseUrl || '';
+  const isGemini = config.type === 'gemini';
   const chunks = chunkTranscript(transcript, 40000);
   const partialSummaries = [];
 
   for (let i = 0; i < chunks.length; i++) {
     const prompt = buildChunkPrompt(chunks[i], videoTitle, i + 1, chunks.length);
     const body = config.buildRequest(prompt, model);
-    const url = config.url(apiKey, model);
+    const url = config.url(apiKey, model, baseUrl);
 
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(settings.provider !== 'gemini' ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
+        ...(isGemini ? {} : { Authorization: `Bearer ${apiKey}` }),
       },
       body: JSON.stringify(body),
     });
@@ -246,13 +270,13 @@ async function generateChunkedSummary(transcript, videoTitle, settings, config, 
   // 最終彙整
   const mergePrompt = buildMergePrompt(partialSummaries, videoTitle);
   const body = config.buildRequest(mergePrompt, model);
-  const url = config.url(settings.apiKey, model);
+  const url = config.url(apiKey, model, baseUrl);
 
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(settings.provider !== 'gemini' ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
+      ...(isGemini ? {} : { Authorization: `Bearer ${apiKey}` }),
     },
     body: JSON.stringify(body),
   });

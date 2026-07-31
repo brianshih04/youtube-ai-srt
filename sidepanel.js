@@ -21,6 +21,7 @@ const state = {
     provider: 'gemini',
     apiKey: '',
     model: '',
+    baseUrl: '',
   },
   activeTab: 'summary',
 };
@@ -56,6 +57,8 @@ const el = {
   settingProvider: document.getElementById('setting-provider'),
   settingApiKey: document.getElementById('setting-apikey'),
   settingModel: document.getElementById('setting-model'),
+  settingBaseUrl: document.getElementById('setting-baseurl'),
+  labelBaseUrl: document.getElementById('label-baseurl'),
   btnSaveSettings: document.getElementById('btn-save-settings'),
 };
 
@@ -106,6 +109,36 @@ async function loadSettings() {
   el.settingProvider.value = state.settings.provider;
   el.settingApiKey.value = state.settings.apiKey;
   el.settingModel.value = state.settings.model || '';
+  el.settingBaseUrl.value = state.settings.baseUrl || '';
+  toggleBaseUrlVisibility();
+}
+
+/**
+ * 顯示/隱藏 Base URL 欄位
+ */
+function toggleBaseUrlVisibility() {
+  const provider = el.settingProvider.value;
+  // custom 必須填，其他可選填（覆寫預設端點）
+  if (provider === 'custom') {
+    el.labelBaseUrl.classList.remove('hidden');
+    el.settingBaseUrl.placeholder = 'https://your-api.com（必填）';
+  } else {
+    el.labelBaseUrl.classList.remove('hidden');
+    el.settingBaseUrl.placeholder = '留空使用預設端點';
+  }
+}
+
+/**
+ * 依 Provider 更新 model placeholder
+ */
+function updateModelPlaceholder() {
+  const defaults = {
+    gemini: 'gemini-2.5-flash',
+    openai: 'gpt-4o-mini',
+    deepseek: 'deepseek-chat',
+    custom: '填入模型名稱',
+  };
+  el.settingModel.placeholder = defaults[el.settingProvider.value] || '';
 }
 
 /**
@@ -116,6 +149,7 @@ async function saveSettings() {
     provider: el.settingProvider.value,
     apiKey: el.settingApiKey.value.trim(),
     model: el.settingModel.value.trim(),
+    baseUrl: el.settingBaseUrl.value.trim(),
   };
   await chrome.storage.local.set({ settings: state.settings });
   closeSettings();
@@ -502,6 +536,10 @@ function bindEvents() {
   el.btnSettings.addEventListener('click', openSettings);
   el.btnCloseSettings.addEventListener('click', closeSettings);
   el.btnSaveSettings.addEventListener('click', saveSettings);
+  el.settingProvider.addEventListener('change', () => {
+    toggleBaseUrlVisibility();
+    updateModelPlaceholder();
+  });
 }
 
 // ── 初始化 ────────────────────────────────────────────

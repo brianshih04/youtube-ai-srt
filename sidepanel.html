@@ -93,14 +93,19 @@
           <option value="gemini">Google Gemini</option>
           <option value="openai">OpenAI</option>
           <option value="deepseek">DeepSeek</option>
+          <option value="custom">OpenAI Compatible (自訂)</option>
         </select>
+      </label>
+      <label class="settings-label" id="label-baseurl">
+        Base URL
+        <input type="text" id="setting-baseurl" class="input" placeholder="https://your-api.com" />
       </label>
       <label class="settings-label">
         API Key
         <input type="password" id="setting-apikey" class="input" placeholder="輸入你的 API Key" />
       </label>
       <label class="settings-label">
-        Model（選填）
+        Model 名稱
         <input type="text" id="setting-model" class="input" placeholder="使用預設模型" />
       </label>
       <button id="btn-save-settings" class="btn btn-primary btn-block">儲存</button>
