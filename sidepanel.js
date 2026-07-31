@@ -258,9 +258,9 @@ function fetchTranscriptAsync() {
         const results = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           world: 'MAIN',
-          func: async () => {
-            // Step 1: 從 player 物件取得 fresh baseUrl
-            var baseUrl = null;
+          func: async (trackUrl, trackLang) => {
+            // Step 1: 取得所有字幕軌的 fresh baseUrl
+            var allTracks = [];
             var player = document.getElementById('movie_player');
 
             if (player && player.getPlayerResponse) {
@@ -269,68 +269,93 @@ function fetchTranscriptAsync() {
                 var tracks = pr && pr.captions
                   && pr.captions.playerCaptionsTracklistRenderer
                   && pr.captions.playerCaptionsTracklistRenderer.captionTracks;
-                if (tracks && tracks.length > 0) {
-                  baseUrl = tracks[0].baseUrl;
-                }
+                if (tracks) allTracks = tracks;
               } catch (e) {}
             }
 
-            // Fallback: 從 ytInitialPlayerResponse 取得
-            if (!baseUrl && typeof ytInitialPlayerResponse !== 'undefined') {
+            if (allTracks.length === 0 && typeof ytInitialPlayerResponse !== 'undefined') {
               try {
                 var tracks2 = ytInitialPlayerResponse.captions
                   && ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer
                   && ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer.captionTracks;
-                if (tracks2 && tracks2.length > 0) {
-                  baseUrl = tracks2[0].baseUrl;
-                }
+                if (tracks2) allTracks = tracks2;
               } catch (e) {}
             }
 
-            if (!baseUrl) {
-              return { success: false, error: '無法從 player 取得字幕軌' };
+            if (allTracks.length === 0) {
+              return { success: false, error: 'player 裡沒有字幕軌' };
             }
 
-            // Step 2: 嘗試多種格式 fetch
-            var cleanUrl = baseUrl.replace(/\\u0026/g, '&');
-            var urls = [
-              cleanUrl + '&fmt=json3',
-              cleanUrl + '&fmt=srv3',
-              cleanUrl,
-            ];
+            // 找到跟傳入的 URL 或語言匹配的 track
+            var targetTrack = null;
+            for (var i = 0; i < allTracks.length; i++) {
+              if (allTracks[i].languageCode === trackLang) {
+                targetTrack = allTracks[i];
+                break;
+              }
+            }
+            if (!targetTrack) targetTrack = allTracks[0];
 
-            for (var i = 0; i < urls.length; i++) {
+            var baseUrl = targetTrack.baseUrl;
+            var cleanUrl = baseUrl.replace(/\\u0026/g, '&');
+
+            // debug info
+            var debug = { trackCount: allTracks.length, chosenLang: targetTrack.languageCode, cleanUrl: cleanUrl.substring(0, 100) };
+
+            // Step 2: 嘗試 fetch
+            var formats = ['json3', 'srv3', 'srv1', ''];
+            for (var f = 0; f < formats.length; f++) {
+              var url = formats[f] ? cleanUrl + '&fmt=' + formats[f] : cleanUrl;
               try {
-                var r = await fetch(urls[i]);
+                var r = await fetch(url);
+                debug['status_' + (formats[f] || 'none')] = r.status;
                 if (!r.ok) continue;
                 var text = await r.text();
+                debug['len_' + (formats[f] || 'none')] = text.length;
                 if (text && text.trim()) {
-                  return { success: true, rawText: text };
+                  return { success: true, rawText: text, debug: debug };
                 }
-              } catch (e) {}
+              } catch (e) {
+                debug['err_' + (formats[f] || 'none')] = e.message;
+              }
             }
 
-            // Step 3: 如果 fetch 全失敗，嘗試從 player 的 caption module 直接讀
+            // Step 3: player caption module fallback
             if (player) {
               try {
                 player.loadModule('captions');
                 await new Promise(function(r) { setTimeout(r, 2000); });
                 var track = player.getOption('captions', 'track');
-                if (track && track.transcript) {
-                  return { success: true, rawText: JSON.stringify(track.transcript) };
+                if (track) {
+                  var captionData = player.getOption('captions', 'tracklist') || [];
+                  debug.captionModuleTracks = captionData.length;
+                  if (track.transcript) {
+                    return { success: true, rawText: JSON.stringify(track.transcript), debug: debug };
+                  }
+                  // 嘗試從 caption display 取得
+                  player.setOption('captions', 'track', { languageCode: targetTrack.languageCode });
+                  await new Promise(function(r) { setTimeout(r, 1000); });
+                  var display = player.getOption('captions', 'text');
+                  if (display) {
+                    return { success: true, rawText: display, debug: debug };
+                  }
                 }
-              } catch (e) {}
+              } catch (e) {
+                debug.captionModuleError = e.message;
+              }
             }
 
-            return { success: false, error: '所有方法都失敗' };
+            return { success: false, error: '所有方法都失敗', debug: debug };
           },
+          args: [state.selectedTrack.baseUrl, state.selectedTrack.languageCode],
         });
 
         const result = results?.[0]?.result;
 
         if (!result || !result.success) {
           hideStatus();
-          showError('逐字稿擷取失敗：' + (result?.error || '未知錯誤'));
+          const dbg = result?.debug ? '\n' + JSON.stringify(result.debug) : '';
+          showError('逐字稿擷取失敗：' + (result?.error || '未知錯誤') + dbg);
           resolve([]);
           return;
         }
