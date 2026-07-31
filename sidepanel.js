@@ -22,7 +22,7 @@ const state = {
     apiKey: '',
     model: '',
     baseUrl: '',
-    asrUrl: 'http://localhost:8503',
+    asrUrl: 'https://yt-transcribe.avision-gb10.org',
   },
   activeTab: 'summary',
 };
@@ -112,7 +112,7 @@ async function loadSettings() {
   el.settingApiKey.value = state.settings.apiKey;
   el.settingModel.value = state.settings.model || '';
   el.settingBaseUrl.value = state.settings.baseUrl || '';
-  el.settingAsrUrl.value = state.settings.asrUrl || 'http://localhost:8503';
+  el.settingAsrUrl.value = state.settings.asrUrl || 'https://yt-transcribe.avision-gb10.org';
   toggleBaseUrlVisibility();
 }
 
@@ -153,7 +153,7 @@ async function saveSettings() {
     apiKey: el.settingApiKey.value.trim(),
     model: el.settingModel.value.trim(),
     baseUrl: el.settingBaseUrl.value.trim(),
-    asrUrl: el.settingAsrUrl.value.trim() || 'http://localhost:8503',
+    asrUrl: el.settingAsrUrl.value.trim() || 'https://yt-transcribe.avision-gb10.org',
   };
   await chrome.storage.local.set({ settings: state.settings });
   closeSettings();
@@ -400,7 +400,7 @@ async function handleWhisperTranscribe() {
 
   showStatus('正在下載音訊並辨識... 這可能需要幾分鐘');
 
-  const asrUrl = state.settings.asrUrl || 'http://localhost:8503';
+  const asrUrl = state.settings.asrUrl || 'https://yt-transcribe.avision-gb10.org';
   const videoUrl = `https://www.youtube.com/watch?v=${state.videoId}`;
 
   try {
