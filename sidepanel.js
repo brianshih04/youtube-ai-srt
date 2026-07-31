@@ -311,8 +311,7 @@ function autoSelectTrack() {
 // ── 字幕擷取 ──────────────────────────────────────────
 
 /**
- * 透過 Innertube ANDROID API 擷取逐字稿（主要方法）
- * MAIN world timedtext 被 YouTube 反爬擋住，ANDROID client 不受限制
+ * 透過 Innertube IOS API 擷取逐字稿（純瀏覽器，不靠伺服器）
  */
 function fetchTranscriptAsync() {
   return new Promise((resolve) => {
@@ -326,16 +325,14 @@ function fetchTranscriptAsync() {
     chrome.runtime.sendMessage(
       { type: 'FETCH_CAPTIONS_INNERTUBE', videoId: state.videoId },
       (response) => {
+        hideStatus();
         if (chrome.runtime.lastError || !response || !response.success) {
-          hideStatus();
           showError('逐字稿擷取失敗：' + (response?.error || chrome.runtime.lastError?.message || '未知錯誤'));
           resolve([]);
           return;
         }
-
         state.transcript = response.data;
         renderTranscript();
-        hideStatus();
         resolve(response.data);
       }
     );

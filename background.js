@@ -69,39 +69,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // ── 字幕擷取 ──────────────────────────────────────────
 
 /**
- * 透過 YouTube Innertube API（ANDROID client）取得字幕
- * ANDROID client 不受 timedtext 反爬限制
+ * 透過 YouTube Innertube API（IOS client）取得字幕
+ * IOS client 不受反爬限制，且不需要特殊 User-Agent
  */
 async function fetchCaptionsViaInnertube(videoId) {
-  // Step 1: 取得 INNERTUBE_API_KEY 和 client version
-  const pageResp = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-    headers: { 'User-Agent': 'Mozilla/5.0' },
-  });
-  const pageHtml = await pageResp.text();
-
-  const keyMatch = pageHtml.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
-  const apiKey = keyMatch ? keyMatch[1] : 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
-
-  // Step 2: 呼叫 Innertube player API（ANDROID client）
-  const innertubeUrl = `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`;
-  const payload = {
-    context: {
-      client: {
-        clientName: 'ANDROID',
-        clientVersion: '20.10.38',
-        androidSdkVersion: 30,
-      },
-    },
-    videoId: videoId,
-  };
-
-  const resp = await fetch(innertubeUrl, {
+  // Step 1: Innertube player API（IOS client）
+  const resp = await fetch('https://www.youtube.com/youtubei/v1/player', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': 'com.google.android.youtube/20.10.38',
-    },
-    body: JSON.stringify(payload),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      context: { client: { clientName: 'IOS', clientVersion: '20.10.4' } },
+      videoId: videoId,
+    }),
   });
 
   if (!resp.ok) {
@@ -122,18 +101,16 @@ async function fetchCaptionsViaInnertube(videoId) {
 
   const baseUrl = track.baseUrl.replace(/\\u0026/g, '&');
 
-  // Step 3: fetch timedtext（ANDROID client 的 URL 不被擋）
+  // Step 2: fetch timedtext
   const formats = [
-    baseUrl + '&fmt=json3',
     baseUrl + '&fmt=srv3',
+    baseUrl + '&fmt=json3',
     baseUrl,
   ];
 
   for (const url of formats) {
     try {
-      const r = await fetch(url, {
-        headers: { 'User-Agent': 'com.google.android.youtube/20.10.38' },
-      });
+      const r = await fetch(url);
       if (!r.ok) continue;
       const text = await r.text();
       if (text.trim()) {
@@ -239,28 +216,36 @@ function parseJson3(data) {
 function parseTimedTextXML(xmlText) {
   const segments = [];
 
-  // 用 regex 解析 <text start="..." dur="...">...</text>
-  const regex = /<text\s+([^>]*)>([\s\S]*?)<\/text>/g;
-  let match;
+  // srv3 用 <p t="33" d="2533">（毫秒），srv1 用 <text start="0.5" dur="2.0">（秒）
+  for (const tag of ['text', 'p']) {
+    const isP = tag === 'p';
+    const regex = new RegExp(`<${tag}\\s+([^>]*)>([\\s\\S]*?)</${tag}>`, 'g');
+    let match;
+    while ((match = regex.exec(xmlText)) !== null) {
+      const attrs = match[1];
+      const rawText = match[2];
 
-  while ((match = regex.exec(xmlText)) !== null) {
-    const attrs = match[1];
-    const rawText = match[2];
+      const sm = attrs.match(/(?:t|start)="([\d.]+)"/);
+      const dm = attrs.match(/(?:d|dur)="([\d.]+)"/);
+      const rawStart = sm ? parseFloat(sm[1]) : 0;
+      const rawDur = dm ? parseFloat(dm[1]) : 0;
 
-    const startMatch = attrs.match(/start="([\d.]+)"/);
-    const durMatch = attrs.match(/dur="([\d.]+)"/);
+      // srv3 的 t/d 是毫秒
+      const start = isP ? rawStart / 1000 : rawStart;
+      const dur = isP ? rawDur / 1000 : rawDur;
+      const text = decodeXmlEntities(rawText).trim();
 
-    const start = startMatch ? parseFloat(startMatch[1]) : 0;
-    const dur = durMatch ? parseFloat(durMatch[1]) : 0;
-    const text = decodeXmlEntities(rawText).trim();
-
-    if (text) {
-      segments.push({ start, dur, text });
+      if (text) {
+        segments.push({ start: round2(start), dur: round2(dur), text });
+      }
     }
+    if (segments.length > 0) break;
   }
 
   return segments;
 }
+
+function round2(n) { return Math.round(n * 100) / 100; }
 
 function decodeXmlEntities(str) {
   return str
