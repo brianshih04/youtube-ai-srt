@@ -86,7 +86,7 @@ function injectMainWorldScript(videoId) {
 
           // 方式三：從 DOM script 標籤解析
           if (!playerResponse) {
-            var scripts = document.querySelectorAll('script:not[src]');
+            var scripts = document.querySelectorAll('script:not([src])');
             for (var i = 0; i < scripts.length; i++) {
               var text = scripts[i].textContent;
               if (!text || text.indexOf('captionTracks') === -1) continue;
