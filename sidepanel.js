@@ -193,6 +193,17 @@ async function loadPageInfo() {
     }
 
     if (!response.hasCaptions) {
+      // Fallback: 嘗試從 MAIN world 取得字幕軌
+      const mainWorldCaptions = await tryGetCaptionsFromMainWorld();
+      if (mainWorldCaptions && mainWorldCaptions.length > 0) {
+        state.videoId = response.videoId;
+        state.videoTitle = response.title;
+        state.captions = mainWorldCaptions;
+        renderVideoInfo();
+        autoSelectTrack();
+        return;
+      }
+
       state.videoId = response.videoId;
       state.videoTitle = response.title;
       state.captions = [];
@@ -209,6 +220,68 @@ async function loadPageInfo() {
     // content script 可能還沒載入，顯示提示
     showEmptyState();
     showError('無法連接頁面，請重新整理 YouTube 頁面後再試');
+  }
+}
+
+/**
+ * 在 MAIN world 讀取 player response 取得字幕軌
+ */
+async function tryGetCaptionsFromMainWorld() {
+  try {
+    const tab = await getActiveTab();
+    if (!tab) return null;
+
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: 'MAIN',
+      func: () => {
+        // 從 player 物件取得
+        var player = document.getElementById('movie_player');
+        if (player && player.getPlayerResponse) {
+          try {
+            var pr = player.getPlayerResponse();
+            var tracks = pr && pr.captions
+              && pr.captions.playerCaptionsTracklistRenderer
+              && pr.captions.playerCaptionsTracklistRenderer.captionTracks;
+            if (tracks && tracks.length > 0) {
+              return tracks.map(function(t) {
+                return {
+                  baseUrl: (t.baseUrl || '').replace(/\\u0026/g, '&'),
+                  languageCode: t.languageCode,
+                  kind: t.kind || null,
+                  name: (t.name && (t.name.simpleText || (t.name.runs && t.name.runs[0] && t.name.runs[0].text))) || t.languageCode,
+                };
+              });
+            }
+          } catch (e) {}
+        }
+
+        // 從 ytInitialPlayerResponse 全域變數取得
+        if (typeof ytInitialPlayerResponse !== 'undefined' && ytInitialPlayerResponse) {
+          try {
+            var tracks2 = ytInitialPlayerResponse.captions
+              && ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer
+              && ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer.captionTracks;
+            if (tracks2 && tracks2.length > 0) {
+              return tracks2.map(function(t) {
+                return {
+                  baseUrl: (t.baseUrl || '').replace(/\\u0026/g, '&'),
+                  languageCode: t.languageCode,
+                  kind: t.kind || null,
+                  name: (t.name && (t.name.simpleText || (t.name.runs && t.name.runs[0] && t.name.runs[0].text))) || t.languageCode,
+                };
+              });
+            }
+          } catch (e) {}
+        }
+
+        return null;
+      },
+    });
+
+    return results?.[0]?.result || null;
+  } catch (e) {
+    return null;
   }
 }
 

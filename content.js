@@ -36,76 +36,77 @@ function getVideoTitle() {
  * 從 DOM <script> 標籤解析 ytInitialPlayerResponse
  */
 function extractCaptionTracks() {
+  // 方法一：從 script tags 的 textContent 解析
   const scripts = document.querySelectorAll('script:not([src])');
   for (const script of scripts) {
     const text = script.textContent;
     if (!text || text.indexOf('captionTracks') === -1) continue;
 
-    // 嘗試提取 ytInitialPlayerResponse = {...};
-    // 注意：JSON 很大，需要貪婪匹配到正確的結尾分號
-    try {
-      // 方法一：標準 regex
-      const match = text.match(/var\s+ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\});\s*(?:var\s|<\/script>|$)/);
-      if (match) {
-        const data = JSON.parse(match[1]);
-        const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-        if (tracks && tracks.length > 0) return tracks;
-      }
-    } catch (e) {
-      // regex 可能截斷 JSON，嘗試方法二
+    const tracks = tryParsePlayerResponse(text);
+    if (tracks && tracks.length > 0) return tracks;
+  }
+
+  // 方法二：從 window 物件直接讀（如果可用）
+  try {
+    if (typeof ytInitialPlayerResponse !== 'undefined' && ytInitialPlayerResponse) {
+      const tracks = ytInitialPlayerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (tracks && tracks.length > 0) return tracks;
     }
+  } catch (e) {}
 
-    // 方法二：用括號配對找到完整 JSON
-    try {
-      const marker = 'ytInitialPlayerResponse';
-      const idx = text.indexOf(marker);
-      if (idx === -1) continue;
+  // 方法三：用 executeScript 在 MAIN world 讀
+  // （由 sidepanel.js 的 chrome.scripting.executeScript 處理，這裡只做同步 fallback）
 
-      // 找到 = 號後的 {
-      let braceIdx = text.indexOf('{', idx);
-      if (braceIdx === -1) continue;
+  return null;
+}
 
-      // 括號配對
-      let depth = 0;
-      let inString = false;
-      let escape = false;
-      let endIdx = -1;
-
-      for (let i = braceIdx; i < text.length; i++) {
-        const ch = text[i];
-        if (escape) {
-          escape = false;
-          continue;
-        }
-        if (ch === '\\') {
-          escape = true;
-          continue;
-        }
-        if (ch === '"') {
-          inString = !inString;
-          continue;
-        }
-        if (inString) continue;
-        if (ch === '{') depth++;
-        else if (ch === '}') {
-          depth--;
-          if (depth === 0) {
-            endIdx = i;
-            break;
-          }
-        }
-      }
-
-      if (endIdx === -1) continue;
-
-      const jsonStr = text.substring(braceIdx, endIdx + 1);
-      const data = JSON.parse(jsonStr);
+/**
+ * 嘗試從文字中解析 ytInitialPlayerResponse JSON
+ */
+function tryParsePlayerResponse(text) {
+  // 方法 A：regex
+  try {
+    const match = text.match(/ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\});\s*(?:var\s|<\/script>|$)/);
+    if (match) {
+      const data = JSON.parse(match[1]);
       const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
       if (tracks && tracks.length > 0) return tracks;
-    } catch (e) {
-      // 繼續嘗試下一個 script
     }
-  }
+  } catch (e) {}
+
+  // 方法 B：括號配對
+  try {
+    const marker = 'ytInitialPlayerResponse';
+    const idx = text.indexOf(marker);
+    if (idx === -1) return null;
+
+    let braceIdx = text.indexOf('{', idx);
+    if (braceIdx === -1) return null;
+
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    let endIdx = -1;
+
+    for (let i = braceIdx; i < text.length; i++) {
+      const ch = text[i];
+      if (escape) { escape = false; continue; }
+      if (ch === '\\') { escape = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) { endIdx = i; break; }
+      }
+    }
+
+    if (endIdx === -1) return null;
+
+    const data = JSON.parse(text.substring(braceIdx, endIdx + 1));
+    const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    if (tracks && tracks.length > 0) return tracks;
+  } catch (e) {}
 
   return null;
 }
