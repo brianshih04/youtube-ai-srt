@@ -151,37 +151,43 @@ function parseJson3(data) {
 
 /**
  * 解析 XML 格式的 timedtext（fallback）
+ * 注意：service worker 沒有 DOMParser，用 regex 解析
  */
 function parseTimedTextXML(xmlText) {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(xmlText, 'text/xml');
   const segments = [];
 
-  const textNodes = doc.querySelectorAll('text');
-  for (const node of textNodes) {
-    const start = parseFloat(node.getAttribute('start') || '0');
-    const dur = parseFloat(node.getAttribute('dur') || '0');
-    const text = decodeHtmlEntities(node.textContent || '');
+  // 用 regex 解析 <text start="..." dur="...">...</text>
+  const regex = /<text\s+([^>]*)>([\s\S]*?)<\/text>/g;
+  let match;
 
-    if (text.trim()) {
-      segments.push({ start, dur, text: text.trim() });
+  while ((match = regex.exec(xmlText)) !== null) {
+    const attrs = match[1];
+    const rawText = match[2];
+
+    const startMatch = attrs.match(/start="([\d.]+)"/);
+    const durMatch = attrs.match(/dur="([\d.]+)"/);
+
+    const start = startMatch ? parseFloat(startMatch[1]) : 0;
+    const dur = durMatch ? parseFloat(durMatch[1]) : 0;
+    const text = decodeXmlEntities(rawText).trim();
+
+    if (text) {
+      segments.push({ start, dur, text });
     }
   }
 
   return segments;
 }
 
-function decodeHtmlEntities(str) {
-  const entities = {
-    '&amp;': '&',
-    '&lt;': '<',
-    '&gt;': '>',
-    '&quot;': '"',
-    '&#39;': "'",
-    '&apos;': "'",
-    '&nbsp;': ' ',
-  };
-  return str.replace(/&[a-z]+;|&#\d+;/gi, (m) => entities[m] || m);
+function decodeXmlEntities(str) {
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n)));
 }
 
 // ── LLM 摘要生成 ──────────────────────────────────────
