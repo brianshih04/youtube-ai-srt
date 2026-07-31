@@ -26,6 +26,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         .catch((err) => sendResponse({ success: false, error: err.message }));
       return true;
 
+    case 'FETCH_CAPTIONS_INNERTUBE':
+      fetchCaptionsViaInnertube(msg.videoId)
+        .then((data) => sendResponse({ success: true, data }))
+        .catch((err) => sendResponse({ success: false, error: err.message }));
+      return true;
+
     case 'PARSE_TRANSCRIPT':
       try {
         const rawText = msg.rawText || '';
@@ -61,6 +67,83 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // ── 字幕擷取 ──────────────────────────────────────────
+
+/**
+ * 透過 YouTube Innertube API（ANDROID client）取得字幕
+ * ANDROID client 不受 timedtext 反爬限制
+ */
+async function fetchCaptionsViaInnertube(videoId) {
+  // Step 1: 取得 INNERTUBE_API_KEY 和 client version
+  const pageResp = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+  });
+  const pageHtml = await pageResp.text();
+
+  const keyMatch = pageHtml.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
+  const apiKey = keyMatch ? keyMatch[1] : 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+
+  // Step 2: 呼叫 Innertube player API（ANDROID client）
+  const innertubeUrl = `https://www.youtube.com/youtubei/v1/player?key=${apiKey}`;
+  const payload = {
+    context: {
+      client: {
+        clientName: 'ANDROID',
+        clientVersion: '20.10.38',
+        androidSdkVersion: 30,
+      },
+    },
+    videoId: videoId,
+  };
+
+  const resp = await fetch(innertubeUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'com.google.android.youtube/20.10.38',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`Innertube API error: HTTP ${resp.status}`);
+  }
+
+  const data = await resp.json();
+  const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+
+  if (!tracks || tracks.length === 0) {
+    throw new Error('Innertube 回傳無字幕軌');
+  }
+
+  // 選最佳字幕軌
+  const track = tracks.find((t) => t.languageCode?.startsWith('zh'))
+    || tracks.find((t) => t.languageCode?.startsWith('en'))
+    || tracks[0];
+
+  const baseUrl = track.baseUrl.replace(/\\u0026/g, '&');
+
+  // Step 3: fetch timedtext（ANDROID client 的 URL 不被擋）
+  const formats = [
+    baseUrl + '&fmt=json3',
+    baseUrl + '&fmt=srv3',
+    baseUrl,
+  ];
+
+  for (const url of formats) {
+    try {
+      const r = await fetch(url, {
+        headers: { 'User-Agent': 'com.google.android.youtube/20.10.38' },
+      });
+      if (!r.ok) continue;
+      const text = await r.text();
+      if (text.trim()) {
+        return parseTimedTextAuto(text);
+      }
+    } catch (e) {}
+  }
+
+  throw new Error('Innertube: 所有格式都回空');
+}
 
 /**
  * 自動偵測格式並解析（json3 / XML）
