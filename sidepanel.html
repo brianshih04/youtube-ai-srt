@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YouTube AI SRT</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <!-- ── 標題列 ─────────────────────────────── -->
+  <header id="header">
+    <div class="header-left">
+      <span class="logo">🎬</span>
+      <span class="title">YouTube AI SRT</span>
+    </div>
+    <div class="header-right">
+      <button id="btn-settings" class="icon-btn" title="設定">⚙️</button>
+    </div>
+  </header>
+
+  <!-- ── 載入指示器 ─────────────────────────── -->
+  <div id="status-bar" class="status-bar hidden">
+    <span class="spinner"></span>
+    <span id="status-text">處理中...</span>
+  </div>
+
+  <!-- ── 錯誤提示 ───────────────────────────── -->
+  <div id="error-bar" class="error-bar hidden">
+    <span id="error-text"></span>
+  </div>
+
+  <!-- ── 主內容區 ───────────────────────────── -->
+  <main id="main-content" class="hidden">
+
+    <!-- 影片資訊 -->
+    <section id="video-info">
+      <h2 id="video-title"></h2>
+      <div id="video-meta" class="meta"></div>
+    </section>
+
+    <!-- 分頁切換 -->
+    <nav id="tabs" class="tabs">
+      <button class="tab active" data-tab="summary">📋 摘要</button>
+      <button class="tab" data-tab="transcript">📝 逐字稿</button>
+    </nav>
+
+    <!-- 摘要區 -->
+    <section id="tab-summary" class="tab-content active">
+      <div class="action-bar">
+        <select id="caption-lang-select" class="select hidden"></select>
+        <button id="btn-generate" class="btn btn-primary">⚡ 生成 AI 摘要</button>
+      </div>
+      <div id="summary-content" class="content-area">
+        <p class="placeholder">點擊上方按鈕生成 AI 摘要</p>
+      </div>
+    </section>
+
+    <!-- 逐字稿區 -->
+    <section id="tab-transcript" class="tab-content">
+      <div class="action-bar">
+        <input type="text" id="search-input" class="search-input" placeholder="🔍 搜尋逐字稿..." />
+        <button id="btn-export-srt" class="btn btn-sm">SRT</button>
+        <button id="btn-export-vtt" class="btn btn-sm">VTT</button>
+      </div>
+      <div id="transcript-content" class="content-area">
+        <p class="placeholder">逐字稿將顯示於此</p>
+      </div>
+    </section>
+
+    <!-- 底部操作列 -->
+    <footer id="footer-bar">
+      <button id="btn-copy-summary" class="btn btn-sm">複製摘要</button>
+      <button id="btn-copy-transcript" class="btn btn-sm">複製逐字稿</button>
+    </footer>
+  </main>
+
+  <!-- ── 空狀態 ─────────────────────────────── -->
+  <div id="empty-state" class="empty-state">
+    <div class="empty-icon">📺</div>
+    <p>打開一個 YouTube 影片頁面以開始</p>
+  </div>
+
+  <!-- ── 設定面板 ───────────────────────────── -->
+  <div id="settings-panel" class="settings-panel hidden">
+    <div class="settings-header">
+      <h3>⚙️ 設定</h3>
+      <button id="btn-close-settings" class="icon-btn">✕</button>
+    </div>
+    <div class="settings-body">
+      <label class="settings-label">
+        API Provider
+        <select id="setting-provider" class="select">
+          <option value="gemini">Google Gemini</option>
+          <option value="openai">OpenAI</option>
+          <option value="deepseek">DeepSeek</option>
+        </select>
+      </label>
+      <label class="settings-label">
+        API Key
+        <input type="password" id="setting-apikey" class="input" placeholder="輸入你的 API Key" />
+      </label>
+      <label class="settings-label">
+        Model（選填）
+        <input type="text" id="setting-model" class="input" placeholder="使用預設模型" />
+      </label>
+      <button id="btn-save-settings" class="btn btn-primary btn-block">儲存</button>
+      <p class="settings-hint">🔒 API Key 僅儲存在本機，不會發送到任何伺服器。</p>
+    </div>
+  </div>
+</body>
+<script src="sidepanel.js"></script>
+</html>
