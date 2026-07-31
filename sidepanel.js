@@ -234,7 +234,8 @@ function autoSelectTrack() {
 // ── 字幕擷取 ──────────────────────────────────────────
 
 /**
- * 在頁面環境 fetch 逐字稿（透過 content script，有正確 cookies）
+ * 在頁面 MAIN world fetch 逐字稿（透過 chrome.scripting.executeScript）
+ * 只有 MAIN world 的 fetch 才帶完整的頁面 session
  */
 function fetchTranscriptAsync() {
   return new Promise((resolve) => {
@@ -245,42 +246,70 @@ function fetchTranscriptAsync() {
 
     showStatus('擷取逐字稿中...');
 
-    getActiveTab().then((tab) => {
+    getActiveTab().then(async (tab) => {
       if (!tab) {
         hideStatus();
         resolve([]);
         return;
       }
 
-      // 請 content script 在頁面環境 fetch
-      chrome.tabs.sendMessage(
-        tab.id,
-        { type: 'FETCH_TRANSCRIPT_INPAGE', baseUrl: state.selectedTrack.baseUrl },
-        async (response) => {
-          if (chrome.runtime.lastError || !response || !response.success) {
-            hideStatus();
-            showError('逐字稿擷取失敗：' + (response?.error || '未知錯誤'));
-            resolve([]);
-            return;
-          }
+      const cleanBaseUrl = state.selectedTrack.baseUrl.replace(/\\u0026/g, '&');
+      const urls = [
+        cleanBaseUrl + '&fmt=json3',
+        cleanBaseUrl + '&fmt=srv3',
+        cleanBaseUrl,
+      ];
 
-          // 把原始文字丟給 background 解析
-          chrome.runtime.sendMessage(
-            { type: 'PARSE_TRANSCRIPT', rawText: response.rawText },
-            (parseResponse) => {
-              hideStatus();
-              if (chrome.runtime.lastError || !parseResponse || !parseResponse.success) {
-                showError('逐字稿解析失敗');
-                resolve([]);
-                return;
-              }
-              state.transcript = parseResponse.data;
-              renderTranscript();
-              resolve(parseResponse.data);
+      try {
+        // 在 MAIN world 執行 fetch（帶完整頁面 session）
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          world: 'MAIN',
+          func: async (urlList) => {
+            for (const url of urlList) {
+              try {
+                const r = await fetch(url);
+                if (!r.ok) continue;
+                const text = await r.text();
+                if (text && text.trim()) {
+                  return { success: true, rawText: text };
+                }
+              } catch (e) {}
             }
-          );
+            return { success: false, error: '所有格式都回傳空' };
+          },
+          args: [urls],
+        });
+
+        const result = results?.[0]?.result;
+
+        if (!result || !result.success) {
+          hideStatus();
+          showError('逐字稿擷取失敗：' + (result?.error || '未知錯誤'));
+          resolve([]);
+          return;
         }
-      );
+
+        // 把原始文字丟給 background 解析
+        chrome.runtime.sendMessage(
+          { type: 'PARSE_TRANSCRIPT', rawText: result.rawText },
+          (parseResponse) => {
+            hideStatus();
+            if (chrome.runtime.lastError || !parseResponse || !parseResponse.success) {
+              showError('逐字稿解析失敗：' + (parseResponse?.error || ''));
+              resolve([]);
+              return;
+            }
+            state.transcript = parseResponse.data;
+            renderTranscript();
+            resolve(parseResponse.data);
+          }
+        );
+      } catch (err) {
+        hideStatus();
+        showError('逐字稿擷取失敗：' + err.message);
+        resolve([]);
+      }
     });
   });
 }
