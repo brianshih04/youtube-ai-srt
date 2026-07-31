@@ -27,9 +27,60 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
 
     case 'FETCH_CAPTIONS_INNERTUBE':
-      fetchCaptionsViaInnertube(msg.videoId)
-        .then((data) => sendResponse({ success: true, data }))
-        .catch((err) => sendResponse({ success: false, error: err.message }));
+      // 透過 content script fetch（帶 YouTube origin，不被擋）
+      chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+        if (!tabs[0]) {
+          sendResponse({ success: false, error: 'No active tab' });
+          return;
+        }
+        try {
+          const results = await chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: async (videoId) => {
+              const resp = await fetch('https://www.youtube.com/youtubei/v1/player', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  context: { client: { clientName: 'IOS', clientVersion: '20.10.4' } },
+                  videoId: videoId,
+                }),
+              });
+              if (!resp.ok) return { error: `HTTP ${resp.status}` };
+              const data = await resp.json();
+              const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+              if (!tracks || tracks.length === 0) return { error: '無字幕軌' };
+
+              const track = tracks.find(t => t.languageCode?.startsWith('zh'))
+                || tracks.find(t => t.languageCode?.startsWith('en'))
+                || tracks[0];
+              const baseUrl = track.baseUrl.replace(/\\u0026/g, '&');
+
+              for (const fmt of ['srv3', 'json3', '']) {
+                const url = fmt ? baseUrl + '&fmt=' + fmt : baseUrl;
+                try {
+                  const r = await fetch(url);
+                  if (!r.ok) continue;
+                  const text = await r.text();
+                  if (text.trim()) return { rawText: text, fmt: fmt };
+                } catch (e) {}
+              }
+              return { error: '所有格式都回空' };
+            },
+            args: [msg.videoId],
+          });
+          const result = results?.[0]?.result;
+          if (result?.error) {
+            sendResponse({ success: false, error: result.error });
+          } else if (result?.rawText) {
+            const data = parseTimedTextAuto(result.rawText);
+            sendResponse({ success: true, data });
+          } else {
+            sendResponse({ success: false, error: '未知錯誤' });
+          }
+        } catch (err) {
+          sendResponse({ success: false, error: err.message });
+        }
+      });
       return true;
 
     case 'PARSE_TRANSCRIPT':
